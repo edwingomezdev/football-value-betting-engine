@@ -1,19 +1,21 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.express as px
+from scipy.stats import poisson
 from src.api_client import FootballDataAPI
 from src.odds_api_client import OddsAPIClient
 from src.model import PoissonModel
 from src.value_engine import ValueBettingEngine
 
 st.set_page_config(
-    page_title="Football Value Betting Engine (Live)",
+    page_title="Football Value Betting Engine (Live & Props)",
     page_icon="⚽",
     layout="wide"
 )
 
-st.title("⚽ Motor Estadístico y de Apuestas de Valor en Fútbol")
-st.markdown("Plataforma cuantitativa para identificar **Apuestas con Valor Esperado ($EV > 0$)** y gestión de riesgo en tiempo real.")
+st.title("⚽ Motor Cuantitativo Avanzado: Resultado, Faltas, Tarjetas y Combinadas")
+st.markdown("Plataforma de análisis probabilístico basado en **Poisson** para mercado principal (1X2), **Props** (Faltas/Tarjetas) y **Simulador de Apuestas Combinadas**.")
 
 # Inicializar Clientes
 fd_api = FootballDataAPI()
@@ -28,24 +30,21 @@ leagues_map = {
     "Ligue 1 (Francia)": ("FL1", "soccer_france_ligue_one")
 }
 
-# Configuración Regional y Monedas
 currencies = {
     "COP (Peso Colombiano)": "$",
     "MXN (Peso Mexicano)": "$",
     "USD (Dólar estadounidense)": "$",
-    "EUR (Euro)": "€",
-    "ARS (Peso Argentino)": "$"
+    "EUR (Euro)": "€"
 }
 
-# Barra Lateral: Configuración General
+# Configuración General
 st.sidebar.header("🌍 Configuración General")
 selected_league_label = st.sidebar.selectbox("Liga / Torneo", list(leagues_map.keys()), index=0)
 fd_code, odds_key = leagues_map[selected_league_label]
 
-selected_currency_name = st.sidebar.selectbox("Moneda del Bankroll", list(currencies.keys()), index=0)
+selected_currency_name = st.sidebar.selectbox("Moneda", list(currencies.keys()), index=0)
 currency_symbol = currencies[selected_currency_name]
 
-# Cargar Datos
 @st.cache_data(ttl=3600)
 def load_historical_data(code):
     return fd_api.fetch_matches_data(code)
@@ -54,7 +53,7 @@ def load_historical_data(code):
 def load_live_odds(key):
     return odds_api.fetch_live_odds(key)
 
-with st.spinner("Cargando modelo estadístico y cuotas en tiempo real..."):
+with st.spinner("Cargando modelo de estadísticas y cuotas..."):
     try:
         try:
             df_matches = load_historical_data(fd_code)
@@ -64,55 +63,17 @@ with st.spinner("Cargando modelo estadístico y cuotas en tiempo real..."):
         model = PoissonModel(df_matches)
         available_teams_model = sorted(list(model.teams_df.index))
         live_events = load_live_odds(odds_key)
-        st.sidebar.success(f"¡{len(live_events)} partidos listos con cuotas!")
+        st.sidebar.success(f"¡{len(live_events)} encuentros sincronizados!")
     except Exception as e:
-        st.error(f"Error cargando datos: {e}")
+        st.error(f"Error al cargar datos: {e}")
         st.stop()
-
-# --- BANNER SUPERIOR DE OPORTUNIDADES DE VALOR DESTACADAS ---
-st.markdown("### 🔥 Oportunidades de Apuestas de Valor Destacadas en Tiempo Real")
-top_opportunities = []
-
-if live_events:
-    engine_temp = ValueBettingEngine()
-    for ev_item in live_events:
-        h_team = ev_item['home_team']
-        a_team = ev_item['away_team']
-        
-        # Ajustar si el equipo no está en el histórico
-        for t_name in [h_team, a_team]:
-            if t_name not in model.teams_df.index:
-                model.teams_df.loc[t_name] = [model.avg_home_goals, model.avg_away_goals, model.avg_away_goals, model.avg_home_goals, 1.0, 1.0, 1.0, 1.0]
-        
-        pred_temp = model.predict_match(h_team, a_team)
-        opps_temp = engine_temp.analyze_opportunity(pred_temp, ev_item['odds'], bankroll=1000)
-        
-        for o in opps_temp:
-            ev_val = float(o['ev'].replace('%', ''))
-            if ev_val > 2.0:
-                top_opportunities.append({
-                    'Partido': f"{h_team} vs {a_team}",
-                    'Mercado': o['market'],
-                    'Cuota Casa': o['bookmaker_odds'],
-                    'EV': f"{ev_val:.2f}%",
-                    'Casa': ev_item['odds'].get('bookmaker_name', 'Mercado')
-                })
-
-if top_opportunities:
-    df_banner = pd.DataFrame(top_opportunities).sort_values(by='EV', ascending=False).head(3)
-    st.info("💡 **Oportunidades de alto valor identificadas para hoy:**")
-    st.dataframe(df_banner, use_container_width=True)
-else:
-    st.warning("No se detectaron oportunidades con EV > +2.0% en los partidos próximos de esta competición.")
-
-st.markdown("---")
 
 st.sidebar.markdown("---")
 st.sidebar.header("⚙️ Selección del Partido")
 
 if live_events:
     event_options = [f"{e['home_team']} vs {e['away_team']}" for e in live_events]
-    selected_event_idx = st.sidebar.selectbox("Seleccionar Encuentro", range(len(event_options)), format_func=lambda x: event_options[x])
+    selected_event_idx = st.sidebar.selectbox("Encuentro", range(len(event_options)), format_func=lambda x: event_options[x])
     selected_event = live_events[selected_event_idx]
     
     home_team_default = selected_event['home_team']
@@ -124,7 +85,7 @@ if live_events:
     default_away_odd = auto_odds.get('away', 3.5)
     bookmaker_name = auto_odds.get('bookmaker_name', 'Mercado')
     
-    st.sidebar.info(f"📍 Cuotas de: **{bookmaker_name}**")
+    st.sidebar.info(f"📍 Casa proveedora: **{bookmaker_name}**")
 else:
     home_team_default = available_teams_model[0]
     away_team_default = available_teams_model[1] if len(available_teams_model) > 1 else available_teams_model[0]
@@ -133,62 +94,153 @@ else:
 home_team = st.sidebar.text_input("Equipo Local", value=home_team_default)
 away_team = st.sidebar.text_input("Equipo Visitante", value=away_team_default)
 
-bankroll = st.sidebar.number_input(f"Capital Disponible ({selected_currency_name})", min_value=10.0, value=100000.0 if "COP" in selected_currency_name else 1000.0, step=1000.0 if "COP" in selected_currency_name else 50.0)
+# --- ESTADO EN VIVO (LIVE TRACKER) ---
+st.sidebar.markdown("---")
+st.sidebar.header("⏱️ Estado del Partido en Vivo")
+is_live = st.sidebar.checkbox("¿El partido está en curso (En Vivo)?", value=False)
 
-st.sidebar.subheader("💰 Cuotas de la Casa de Apuestas")
-odds_home = st.sidebar.number_input(f"Cuota Local ({home_team})", min_value=1.01, value=float(default_home_odd), step=0.05)
-odds_draw = st.sidebar.number_input("Cuota Empate (X)", min_value=1.01, value=float(default_draw_odd), step=0.05)
-odds_away = st.sidebar.number_input(f"Cuota Visitante ({away_team})", min_value=1.01, value=float(default_away_odd), step=0.05)
+if is_live:
+    live_minute = st.sidebar.slider("Minuto del Partido", min_value=1, max_value=90, value=35)
+    live_score_home = st.sidebar.number_input(f"Goles {home_team}", min_value=0, value=1)
+    live_score_away = st.sidebar.number_input(f"Goles {away_team}", min_value=0, value=0)
+    red_cards_home = st.sidebar.number_input(f"Tarjetas Rojas {home_team}", min_value=0, value=0)
+    red_cards_away = st.sidebar.number_input(f"Tarjetas Rojas {away_team}", min_value=0, value=0)
+else:
+    live_minute = 0
+    live_score_home, live_score_away = 0, 0
+    red_cards_home, red_cards_away = 0, 0
 
-# Procesar Predicción
+# Ajustar por tarjetas rojas
 for t in [home_team, away_team]:
     if t not in model.teams_df.index:
         model.teams_df.loc[t] = [model.avg_home_goals, model.avg_away_goals, model.avg_away_goals, model.avg_home_goals, 1.0, 1.0, 1.0, 1.0]
 
+if red_cards_home > 0:
+    model.teams_df.loc[home_team, 'attack_home'] *= (0.75 ** red_cards_home)
+    model.teams_df.loc[home_team, 'defense_home'] *= (1.25 ** red_cards_home)
+if red_cards_away > 0:
+    model.teams_df.loc[away_team, 'attack_away'] *= (0.75 ** red_cards_away)
+    model.teams_df.loc[away_team, 'defense_away'] *= (1.25 ** red_cards_away)
+
+# Cuotas
+st.sidebar.subheader("💰 Cuotas 1X2")
+odds_home = st.sidebar.number_input(f"Cuota Local ({home_team})", min_value=1.01, value=float(default_home_odd), step=0.05)
+odds_draw = st.sidebar.number_input("Cuota Empate (X)", min_value=1.01, value=float(default_draw_odd), step=0.05)
+odds_away = st.sidebar.number_input(f"Cuota Visitante ({away_team})", min_value=1.01, value=float(default_away_odd), step=0.05)
+
 prediction = model.predict_match(home_team, away_team)
+
+# Reajuste de tiempo restante si está en vivo
+if is_live:
+    time_factor = (90 - live_minute) / 90.0
+    prediction['expected_goals_home'] = round(prediction['expected_goals_home'] * time_factor, 2)
+    prediction['expected_goals_away'] = round(prediction['expected_goals_away'] * time_factor, 2)
+
 engine = ValueBettingEngine()
 market_odds = {'home': odds_home, 'draw': odds_draw, 'away': odds_away}
-opportunities = engine.analyze_opportunity(prediction, market_odds, bankroll=bankroll)
 
-# Pestañas
-tab1, tab2, tab3 = st.tabs(["📊 Análisis y Diagnóstico", "🔥 Matriz de Marcadores Probables", "📈 Métricas de Equipos"])
+# Pestañas Principales
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "💵 Calculadora y Simulación", 
+    "🟨 Mercado de Faltas y Tarjetas", 
+    "🔗 Constructor de Combinadas", 
+    "🔥 Marcadores Exactos (%)", 
+    "📈 Métricas de Equipos"
+])
 
+# --- PESTAÑA 1: CALCULADORA Y SIMULACIÓN ---
 with tab1:
-    col1, col2 = st.columns(2)
+    if is_live:
+        st.warning(f"🚨 **PARTIDO EN VIVO ({live_minute}')** — Marcador Actual: {home_team} {live_score_home} - {live_score_away} {away_team}")
+
+    st.subheader("💵 Calculadora Directa de Ganancias")
+    col_input, col_market = st.columns(2)
+    with col_input:
+        user_bet_amount = st.number_input(
+            f"Monto a Apostar ({currency_symbol})",
+            min_value=1000.0 if "COP" in selected_currency_name else 1.0,
+            value=10000.0 if "COP" in selected_currency_name else 10.0,
+            step=1000.0 if "COP" in selected_currency_name else 5.0
+        )
+    with col_market:
+        selected_market_bet = st.selectbox(
+            "Seleccionar Mercado 1X2",
+            [f"Gana Local ({home_team}) @ {odds_home}", f"Empate (X) @ {odds_draw}", f"Gana Visitante ({away_team}) @ {odds_away}"]
+        )
     
-    with col1:
-        st.subheader("⚽ Goles Esperados (xG)")
-        st.metric(f"xG {home_team}", prediction['expected_goals_home'])
-        st.metric(f"xG {away_team}", prediction['expected_goals_away'])
+    if "Gana Local" in selected_market_bet:
+        chosen_odd, chosen_prob = odds_home, prediction['prob_home']
+    elif "Empate" in selected_market_bet:
+        chosen_odd, chosen_prob = odds_draw, prediction['prob_draw']
+    else:
+        chosen_odd, chosen_prob = odds_away, prediction['prob_away']
 
-    with col2:
-        st.subheader("🎯 Probabilidades y Cuotas Justas")
-        st.write(f"**Victoria Local ({home_team}):** {prediction['prob_home']*100:.1f}% *(Cuota Justa: `{prediction['fair_odds_home']}`)*")
-        st.write(f"**Empate (X):** {prediction['prob_draw']*100:.1f}% *(Cuota Justa: `{prediction['fair_odds_draw']}`)*")
-        st.write(f"**Victoria Visitante ({away_team}):** {prediction['prob_away']*100:.1f}% *(Cuota Justa: `{prediction['fair_odds_away']}`)*")
+    retorno_total = user_bet_amount * chosen_odd
+    ganancia_neta = user_bet_amount * (chosen_odd - 1)
+    ev_calculado = (chosen_prob * chosen_odd) - 1
 
-    st.markdown("---")
-    st.subheader("💡 Decisiones de Apuesta (Diagnóstico en Tiempo Real)")
-    
-    has_value_any = False
-    for opp in opportunities:
-        ev_val = float(opp['ev'].replace('%', ''))
-        market_label = opp['market'].replace('Home (1)', f'Gana Local ({home_team})').replace('Draw (X)', 'Empate (X)').replace('Away (2)', f'Gana Visitante ({away_team})')
-        
-        # Calcular monto en formato de moneda local
-        pct_float = float(opp['suggested_stake'].split('(')[1].replace('%)', '')) / 100
-        stake_amount = bankroll * pct_float
-        
-        if ev_val > 2.0:
-            has_value_any = True
-            st.success(f"🟢 **¡APOSTAR!** — Mercado: **{market_label}** | EV: **+{ev_val:.2f}%** | Apuesta Sugerida: **{currency_symbol}{stake_amount:,.2f}** ({pct_float*100:.2f}% del capital)")
-        else:
-            st.error(f"🔴 **NO APOSTAR** — Mercado: **{market_label}** | EV: **{ev_val:.2f}%** (Sin ventaja matemática)")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Retorno Total (Cobro)", f"{currency_symbol}{retorno_total:,.2f}")
+    c2.metric("Ganancia Neta Limpia", f"{currency_symbol}{ganancia_neta:,.2f}")
+    c3.metric("Valor Esperado (EV)", f"{ev_calculado*100:.2f}%", delta="🟢 Con Valor" if ev_calculado > 0.02 else "🔴 Sin Valor")
 
+    if ev_calculado > 0.02:
+        st.success(f"✅ **DECISIÓN:** Apostar {currency_symbol}{user_bet_amount:,.2f}. El modelo confirma ventaja matemática (Retorno esperado: +{ev_calculado*100:.2f}%).")
+    else:
+        st.error(f"❌ **DECISIÓN:** NO APOSTAR. La cuota no compensa el riesgo estadístico.")
+
+# --- PESTAÑA 2: FALTAS Y TARJETAS ---
 with tab2:
+    st.subheader("🟨 Modelado Estadístico de Faltas y Tarjetas (Props)")
+    st.markdown("Estimación mediante distribución de Poisson basada en promedios históricos del equipo y nivel de severidad del arbitraje:")
+
+    col_fouls_1, col_fouls_2 = st.columns(2)
+    with col_fouls_1:
+        avg_referee_cards = st.slider("Promedio de Tarjetas del Árbitro por Partido", min_value=2.0, max_value=8.0, value=4.5, step=0.1)
+        line_cards = st.number_input("Línea de Tarjetas de la Casa (Over/Under)", min_value=1.5, max_value=8.5, value=4.5, step=1.0)
+        cards_odds_over = st.number_input("Cuota Over Tarjetas", min_value=1.01, value=1.85, step=0.05)
+    
+    with col_fouls_2:
+        # Probabilidad acumulada de Poisson para Tarjetas Over
+        prob_under_cards = sum([poisson.pmf(i, avg_referee_cards) for i in range(int(np.floor(line_cards)) + 1)])
+        prob_over_cards = 1.0 - prob_under_cards
+        ev_cards = (prob_over_cards * cards_odds_over) - 1
+
+        st.metric("Promedio Esperado de Tarjetas", f"{avg_referee_cards:.1f}")
+        st.write(f"**Probabilidad Over {line_cards} Tarjetas:** {prob_over_cards*100:.1f}% *(Cuota Justa: `{1/prob_over_cards:.2f}`)*")
+        st.write(f"**Valor Esperado (EV):** `{ev_cards*100:.2f}%`")
+        
+        if ev_cards > 0.02:
+            st.success(f"🟢 **APUESTA CON VALOR EN PROPS:** Apostar al Over {line_cards} Tarjetas @ {cards_odds_over}")
+        else:
+            st.error("🔴 **SIN VALOR:** No se recomienda entrar a la línea de tarjetas seleccionada.")
+
+# --- PESTAÑA 3: CONSTRUCTOR DE COMBINADAS ---
+with tab3:
+    st.subheader("🔗 Estimador de Apuestas Combinadas (Parley / Bet Builder)")
+    st.markdown("Calcula la probabilidad real conjunta multiplicando eventos independientes:")
+
+    col_par1, col_par2 = st.columns(2)
+    with col_par1:
+        leg1_prob = st.slider("Probabilidad Leg 1 (ej. Resultado Partido)", min_value=10, max_value=95, value=int(prediction['prob_home']*100)) / 100.0
+        leg1_odds = st.number_input("Cuota Leg 1", min_value=1.01, value=float(odds_home))
+        
+        leg2_prob = st.slider("Probabilidad Leg 2 (ej. Over Tarjetas)", min_value=10, max_value=95, value=int(prob_over_cards*100)) / 100.0
+        leg2_odds = st.number_input("Cuota Leg 2", min_value=1.01, value=float(cards_odds_over))
+
+    with col_par2:
+        combined_odds = leg1_odds * leg2_odds
+        combined_prob = leg1_prob * leg2_prob
+        ev_combined = (combined_prob * combined_odds) - 1
+
+        st.metric("Cuota Total Combinada", f"{combined_odds:.2f}")
+        st.metric("Probabilidad Conjunta Real", f"{combined_prob*100:.1f}%")
+        st.metric("EV de la Combinada", f"{ev_combined*100:.2f}%", delta="🟢 Combinada Rentable" if ev_combined > 0.02 else "🔴 Sin Valor")
+
+# --- PESTAÑA 4: MARCADORES EXACTOS ---
+with tab4:
     st.subheader("🔥 Mapa de Calor: Probabilidad de Marcadores Exactos (%)")
     matrix_pct = prediction['matrix'] * 100
-    
     fig = px.imshow(
         matrix_pct,
         labels=dict(x=f"Goles {away_team}", y=f"Goles {home_team}", color="Probabilidad (%)"),
@@ -197,11 +249,15 @@ with tab2:
         color_continuous_scale="Viridis",
         text_auto=".1f"
     )
-    fig.update_layout(height=500, width=600)
+    fig.update_layout(height=480, width=580)
     st.plotly_chart(fig, use_container_width=True)
 
-with tab3:
-    st.subheader("🛡️ Métricas de Fuerza Ofensiva y Defensiva")
+# --- PESTAÑA 5: MÉTRICAS DE EQUIPOS (RESTAURADAS) ---
+with tab5:
+    st.subheader("📈 Métricas Históricas de Fuerza Ofensiva y Defensiva")
+    st.markdown("Valores calculados respecto al promedio general de la competición (1.0 = Promedio Liga):")
+    
     df_teams = model.teams_df[['attack_home', 'defense_home', 'attack_away', 'defense_away']].copy()
     df_teams.columns = ["Ataque (Local)", "Defensa (Local)", "Ataque (Visitante)", "Defensa (Visitante)"]
+    
     st.dataframe(df_teams.round(2), use_container_width=True)
