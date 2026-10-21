@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from src.api_client import FootballDataAPI
+from src.odds_api_client import OddsAPIClient
 from src.model import PoissonModel
 from src.value_engine import ValueBettingEngine
 
@@ -11,46 +12,96 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("⚽ Football Value Betting Engine — Datos en Tiempo Real")
-st.markdown("Plataforma interactiva conectada a la API oficial de fútbol para el análisis probabilístico de **Poisson**, **Expected Value ($EV$)** y gestión de riesgo mediante el **Criterio de Kelly**.")
+st.title("⚽ Football Value Betting Engine — Champions League & Ligas en Vivo")
+st.markdown("Analizador de **Valor Esperado ($EV > 0$)** con datos históricos y **cuotas reales en tiempo real** extraídas de casas de apuestas.")
 
-# Inicializar API
-api = FootballDataAPI()
-competitions = api.get_competitions()
+# Inicializar Clientes
+fd_api = FootballDataAPI()
+odds_api = OddsAPIClient()
 
-# Panel Lateral
+leagues_map = {
+    "UEFA Champions League": ("CL", "soccer_uefa_champs_league"),
+    "Premier League (Inglaterra)": ("PL", "soccer_epl"),
+    "LaLiga (España)": ("PD", "soccer_spain_la_liga"),
+    "Serie A (Italia)": ("SA", "soccer_italy_serie_a"),
+    "Bundesliga (Alemania)": ("BL1", "soccer_germany_bundesliga"),
+    "Ligue 1 (Francia)": ("FL1", "soccer_france_ligue_one")
+}
+
+# Barra Lateral: Selección de Liga
 st.sidebar.header("🌍 Seleccionar Competición")
-selected_league_name = st.sidebar.selectbox("Liga", list(competitions.keys()), index=0)
-league_code = competitions[selected_league_name]
+selected_league_label = st.sidebar.selectbox("Liga / Torneo", list(leagues_map.keys()), index=0)
+fd_code, odds_key = leagues_map[selected_league_label]
 
-# Carga de datos dinámicos con caché de Streamlit
+# Cargar Datos Históricos para el Modelo (con caché de 1 hora)
 @st.cache_data(ttl=3600)
-def load_live_data(code):
-    return api.fetch_matches_data(code)
+def load_historical_data(code):
+    return fd_api.fetch_matches_data(code)
 
-with st.spinner(f"Cargando datos en vivo de {selected_league_name}..."):
+# Cargar Cuotas Reales en Tiempo Real (con caché de 10 minutos)
+@st.cache_data(ttl=600)
+def load_live_odds(key):
+    return odds_api.fetch_live_odds(key)
+
+with st.spinner("Cargando modelo estadístico y cuotas en tiempo real..."):
     try:
-        df_matches = load_live_data(league_code)
+        # Si la API de resultados históricos no trae la Champions League por restricción,
+        # usamos los datos de LaLiga/Premier como base general o el dataset histórico local.
+        try:
+            df_matches = load_historical_data(fd_code)
+        except Exception:
+            df_matches = pd.read_csv('data/SP1.csv')
+            
         model = PoissonModel(df_matches)
-        available_teams = sorted(list(model.teams_df.index))
-        st.sidebar.success(f"¡{len(df_matches)} partidos analizados!")
+        available_teams_model = sorted(list(model.teams_df.index))
+        
+        # Cargar eventos en vivo con cuotas
+        live_events = load_live_odds(odds_key)
+        st.sidebar.success(f"¡{len(live_events)} partidos con cuotas en vivo!")
     except Exception as e:
-        st.error(f"Error al conectar con la API: {e}")
+        st.error(f"Error cargando datos: {e}")
         st.stop()
 
 st.sidebar.markdown("---")
-st.sidebar.header("⚙️ Configuración del Partido")
+st.sidebar.header("⚙️ Selección de Partido")
 
-home_team = st.sidebar.selectbox("Equipo Local", available_teams, index=0)
-away_teams_filtered = [t for t in available_teams if t != home_team]
-away_team = st.sidebar.selectbox("Equipo Visitante", away_teams_filtered, index=0)
+# Crear opciones de partidos en vivo si están disponibles
+if live_events:
+    event_options = [f"{e['home_team']} vs {e['away_team']}" for e in live_events]
+    selected_event_idx = st.sidebar.selectbox("Partidos Próximos (Con Cuotas Reales)", range(len(event_options)), format_func=lambda x: event_options[x])
+    selected_event = live_events[selected_event_idx]
+    
+    # Asignación automática de equipos y cuotas desde la API
+    home_team_default = selected_event['home_team']
+    away_team_default = selected_event['away_team']
+    
+    auto_odds = selected_event['odds']
+    default_home_odd = auto_odds.get('home', 2.0)
+    default_draw_odd = auto_odds.get('draw', 3.0)
+    default_away_odd = auto_odds.get('away', 3.5)
+    bookmaker_name = auto_odds.get('bookmaker_name', 'Mercado')
+    
+    st.sidebar.info(f"📍 Cuotas en vivo extraídas de: **{bookmaker_name}**")
+else:
+    home_team_default = available_teams_model[0]
+    away_team_default = available_teams_model[1] if len(available_teams_model) > 1 else available_teams_model[0]
+    default_home_odd, default_draw_odd, default_away_odd = 1.85, 3.80, 4.50
+
+# Selector manual o verificado
+home_team = st.sidebar.text_input("Equipo Local", value=home_team_default)
+away_team = st.sidebar.text_input("Equipo Visitante", value=away_team_default)
 
 bankroll = st.sidebar.number_input("Capital Disponible ($)", min_value=10.0, value=1000.0, step=50.0)
 
-st.sidebar.subheader("💰 Cuotas de la Casa de Apuestas")
-odds_home = st.sidebar.number_input(f"Cuota Local ({home_team})", min_value=1.01, value=1.85, step=0.05)
-odds_draw = st.sidebar.number_input("Cuota Empate (X)", min_value=1.01, value=3.80, step=0.05)
-odds_away = st.sidebar.number_input(f"Cuota Visitante ({away_team})", min_value=1.01, value=4.50, step=0.05)
+st.sidebar.subheader("💰 Cuotas de la Casa de Apuestas (Modificables)")
+odds_home = st.sidebar.number_input(f"Cuota Local ({home_team})", min_value=1.01, value=float(default_home_odd), step=0.05)
+odds_draw = st.sidebar.number_input("Cuota Empate (X)", min_value=1.01, value=float(default_draw_odd), step=0.05)
+odds_away = st.sidebar.number_input(f"Cuota Visitante ({away_team})", min_value=1.01, value=float(default_away_odd), step=0.05)
+
+# Si los equipos del partido en vivo no están en la tabla histórica, añadirlos temporalmente con promedio liga
+for t in [home_team, away_team]:
+    if t not in model.teams_df.index:
+        model.teams_df.loc[t] = [model.avg_home_goals, model.avg_away_goals, model.avg_away_goals, model.avg_home_goals, 1.0, 1.0, 1.0, 1.0]
 
 # Procesar Predicción y Análisis
 prediction = model.predict_match(home_team, away_team)
@@ -58,8 +109,8 @@ engine = ValueBettingEngine()
 market_odds = {'home': odds_home, 'draw': odds_draw, 'away': odds_away}
 opportunities = engine.analyze_opportunity(prediction, market_odds, bankroll=bankroll)
 
-# Pestañas
-tab1, tab2, tab3 = st.tabs(["📊 Análisis y Apuestas de Valor", "🔥 Matriz de Marcadores Probables", "📈 Tabla de Equipos y Métricas"])
+# Pestañas Principales
+tab1, tab2, tab3 = st.tabs(["📊 Análisis y Apuestas de Valor", "🔥 Matriz de Marcadores Probables", "📈 Métricas de Equipos"])
 
 with tab1:
     col1, col2 = st.columns(2)
@@ -92,8 +143,6 @@ with tab1:
 
 with tab2:
     st.subheader("🔥 Mapa de Calor: Probabilidad de Marcadores Exactos (%)")
-    st.markdown("Distribución bivariada de Poisson para cada marcador posible hasta 5 goles:")
-    
     matrix_pct = prediction['matrix'] * 100
     
     fig = px.imshow(
@@ -108,7 +157,7 @@ with tab2:
     st.plotly_chart(fig, use_container_width=True)
 
 with tab3:
-    st.subheader(f"🛡️ Métricas de Fuerza Ofensiva y Defensiva en {selected_league_name}")
+    st.subheader(f"🛡️ Métricas de Fuerza Ofensiva y Defensiva")
     df_teams = model.teams_df[['attack_home', 'defense_home', 'attack_away', 'defense_away']].copy()
     df_teams.columns = ["Ataque (Local)", "Defensa (Local)", "Ataque (Visitante)", "Defensa (Visitante)"]
     st.dataframe(df_teams.round(2), use_container_width=True)

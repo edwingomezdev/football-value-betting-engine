@@ -15,12 +15,13 @@ class FootballDataAPI:
     def get_competitions(self):
         """Devuelve las ligas disponibles en la capa gratuita."""
         return {
-            "LaLiga (España)": "PD",
-            "Premier League (Inglaterra)": "PL",
-            "Serie A (Italia)": "SA",
-            "Bundesliga (Alemania)": "BL1",
-            "Ligue 1 (Francia)": "FL1",
-            "Champions League": "CL"
+           "Premier League (Inglaterra)": "PL",
+        "LaLiga (España)": "PD",
+        "Serie A (Italia)": "SA",
+        "Bundesliga (Alemania)": "BL1",
+        "Ligue 1 (Francia)": "FL1",
+        "Eredivisie (Países Bajos)": "DED",
+        "Primeira Liga (Portugal)": "PPD"
         }
 
     def fetch_matches_data(self, competition_code="PD"):
