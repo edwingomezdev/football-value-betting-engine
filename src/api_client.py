@@ -3,7 +3,6 @@ import requests
 import pandas as pd
 from dotenv import load_dotenv
 
-# Cargar variables de entorno desde el archivo .env
 load_dotenv()
 
 class FootballDataAPI:
@@ -15,28 +14,24 @@ class FootballDataAPI:
     def get_competitions(self):
         """Devuelve las ligas disponibles en la capa gratuita."""
         return {
-           "Premier League (Inglaterra)": "PL",
-        "LaLiga (España)": "PD",
-        "Serie A (Italia)": "SA",
-        "Bundesliga (Alemania)": "BL1",
-        "Ligue 1 (Francia)": "FL1",
-        "Eredivisie (Países Bajos)": "DED",
-        "Primeira Liga (Portugal)": "PPD"
+            "UEFA Champions League": "CL",
+            "Premier League (Inglaterra)": "PL",
+            "LaLiga (España)": "PD",
+            "Serie A (Italia)": "SA",
+            "Bundesliga (Alemania)": "BL1",
+            "Ligue 1 (Francia)": "FL1"
         }
 
     def fetch_matches_data(self, competition_code="PD"):
-        """Descarga los partidos terminados de la temporada actual para alimentar el modelo de Poisson."""
+        """Descarga partidos terminados para alimentar el modelo de Poisson."""
         url = f"{self.base_url}/competitions/{competition_code}/matches"
         params = {"status": "FINISHED"}
         
         response = requests.get(url, headers=self.headers, params=params)
-        
         if response.status_code != 200:
-            raise Exception(f"Error en la API ({response.status_code}): {response.json().get('message', 'Sin clave o límite excedido')}")
+            raise Exception(f"Error en FootballDataAPI ({response.status_code})")
             
-        data = response.json()
-        matches = data.get("matches", [])
-        
+        matches = response.json().get("matches", [])
         parsed_matches = []
         for match in matches:
             home_team = match["homeTeam"]["name"]
@@ -52,15 +47,29 @@ class FootballDataAPI:
                     "FTAG": score_away
                 })
                 
-        df = pd.DataFrame(parsed_matches)
-        return df
+        return pd.DataFrame(parsed_matches)
 
-# Prueba directa
-if __name__ == "__main__":
-    client = FootballDataAPI()
-    try:
-        df_matches = client.fetch_matches_data("PL") # Probar Premier League
-        print(f"¡Éxito! Se descargaron {len(df_matches)} partidos reales en tiempo real.")
-        print(df_matches.head())
-    except Exception as e:
-        print(f"Atención: {e}")
+    def fetch_live_match_score(self, home_team, away_team):
+        """Busca partidos en curso (IN_PLAY) y retorna marcador y minuto en vivo."""
+        url = f"{self.base_url}/matches"
+        params = {"status": "IN_PLAY"}
+        
+        try:
+            response = requests.get(url, headers=self.headers, params=params)
+            if response.status_code == 200:
+                matches = response.json().get("matches", [])
+                for match in matches:
+                    h_name = match["homeTeam"]["name"]
+                    a_name = match["awayTeam"]["name"]
+                    
+                    if home_team.lower() in h_name.lower() or h_name.lower() in home_team.lower():
+                        return {
+                            "is_live": True,
+                            "minute": match.get("minute", 45),
+                            "score_home": match["score"]["fullTime"]["home"] or 0,
+                            "score_away": match["score"]["fullTime"]["away"] or 0
+                        }
+        except Exception:
+            pass
+            
+        return {"is_live": False, "minute": 0, "score_home": 0, "score_away": 0}

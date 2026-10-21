@@ -8,6 +8,7 @@ from src.odds_api_client import OddsAPIClient
 from src.model import PoissonModel
 from src.value_engine import ValueBettingEngine
 
+# Configuración inicial de la página
 st.set_page_config(
     page_title="Football Value Betting Engine (Live & Props)",
     page_icon="⚽",
@@ -17,7 +18,7 @@ st.set_page_config(
 st.title("⚽ Motor Cuantitativo Avanzado: Resultado, Faltas, Tarjetas y Combinadas")
 st.markdown("Plataforma de análisis probabilístico basado en **Poisson** para mercado principal (1X2), **Props** (Faltas/Tarjetas) y **Simulador de Apuestas Combinadas**.")
 
-# Inicializar Clientes
+# Inicializar Clientes de API
 fd_api = FootballDataAPI()
 odds_api = OddsAPIClient()
 
@@ -37,7 +38,7 @@ currencies = {
     "EUR (Euro)": "€"
 }
 
-# Configuración General
+# Configuración General en la Barra Lateral
 st.sidebar.header("🌍 Configuración General")
 selected_league_label = st.sidebar.selectbox("Liga / Torneo", list(leagues_map.keys()), index=0)
 fd_code, odds_key = leagues_map[selected_league_label]
@@ -45,6 +46,13 @@ fd_code, odds_key = leagues_map[selected_league_label]
 selected_currency_name = st.sidebar.selectbox("Moneda", list(currencies.keys()), index=0)
 currency_symbol = currencies[selected_currency_name]
 
+# Botón para limpiar memoria caché y refrescar cuotas
+st.sidebar.markdown("---")
+if st.sidebar.button("🔄 Actualizar Datos y Cuotas Ahora"):
+    st.cache_data.clear()
+    st.rerun()
+
+# Funciones con Caché
 @st.cache_data(ttl=3600)
 def load_historical_data(code):
     return fd_api.fetch_matches_data(code)
@@ -53,7 +61,7 @@ def load_historical_data(code):
 def load_live_odds(key):
     return odds_api.fetch_live_odds(key)
 
-with st.spinner("Cargando modelo de estadísticas y cuotas..."):
+with st.spinner("Cargando modelo de estadísticas y cuotas en tiempo real..."):
     try:
         try:
             df_matches = load_historical_data(fd_code)
@@ -63,7 +71,6 @@ with st.spinner("Cargando modelo de estadísticas y cuotas..."):
         model = PoissonModel(df_matches)
         available_teams_model = sorted(list(model.teams_df.index))
         live_events = load_live_odds(odds_key)
-        st.sidebar.success(f"¡{len(live_events)} encuentros sincronizados!")
     except Exception as e:
         st.error(f"Error al cargar datos: {e}")
         st.stop()
@@ -71,13 +78,15 @@ with st.spinner("Cargando modelo de estadísticas y cuotas..."):
 st.sidebar.markdown("---")
 st.sidebar.header("⚙️ Selección del Partido")
 
+# Validación estricta de partidos activos
 if live_events:
+    st.sidebar.success(f"¡{len(live_events)} encuentros sincronizados!")
     event_options = [f"{e['home_team']} vs {e['away_team']}" for e in live_events]
     selected_event_idx = st.sidebar.selectbox("Encuentro", range(len(event_options)), format_func=lambda x: event_options[x])
     selected_event = live_events[selected_event_idx]
     
-    home_team_default = selected_event['home_team']
-    away_team_default = selected_event['away_team']
+    home_team = selected_event['home_team']
+    away_team = selected_event['away_team']
     
     auto_odds = selected_event['odds']
     default_home_odd = auto_odds.get('home', 2.0)
@@ -87,22 +96,35 @@ if live_events:
     
     st.sidebar.info(f"📍 Casa proveedora: **{bookmaker_name}**")
 else:
-    home_team_default = available_teams_model[0]
-    away_team_default = available_teams_model[1] if len(available_teams_model) > 1 else available_teams_model[0]
-    default_home_odd, default_draw_odd, default_away_odd = 1.85, 3.80, 4.50
+    st.warning(f"⚠️ No hay partidos programados ni en vivo actualmente para **{selected_league_label}**. Selecciona otra liga en la barra lateral (como Premier League o LaLiga).")
+    st.stop()
 
-home_team = st.sidebar.text_input("Equipo Local", value=home_team_default)
-away_team = st.sidebar.text_input("Equipo Visitante", value=away_team_default)
+# Detección en vivo desde la API
+if hasattr(fd_api, 'fetch_live_match_score'):
+    live_data = fd_api.fetch_live_match_score(home_team, away_team)
+else:
+    live_data = {"is_live": False, "minute": 0, "score_home": 0, "score_away": 0}
 
-# --- ESTADO EN VIVO (LIVE TRACKER) ---
 st.sidebar.markdown("---")
 st.sidebar.header("⏱️ Estado del Partido en Vivo")
-is_live = st.sidebar.checkbox("¿El partido está en curso (En Vivo)?", value=False)
+
+auto_detected = live_data.get("is_live", False)
+is_live = st.sidebar.checkbox("¿El partido está en curso (En Vivo)?", value=auto_detected)
 
 if is_live:
-    live_minute = st.sidebar.slider("Minuto del Partido", min_value=1, max_value=90, value=35)
-    live_score_home = st.sidebar.number_input(f"Goles {home_team}", min_value=0, value=1)
-    live_score_away = st.sidebar.number_input(f"Goles {away_team}", min_value=0, value=0)
+    if auto_detected:
+        st.sidebar.success("⚡ ¡Marcador en vivo detectado por API!")
+        default_min = live_data["minute"]
+        default_h_score = live_data["score_home"]
+        default_a_score = live_data["score_away"]
+    else:
+        default_min = 45
+        default_h_score = 0
+        default_a_score = 0
+    
+    live_minute = st.sidebar.slider("Minuto del Partido", min_value=1, max_value=90, value=default_min)
+    live_score_home = st.sidebar.number_input(f"Goles {home_team}", min_value=0, value=default_h_score)
+    live_score_away = st.sidebar.number_input(f"Goles {away_team}", min_value=0, value=default_a_score)
     red_cards_home = st.sidebar.number_input(f"Tarjetas Rojas {home_team}", min_value=0, value=0)
     red_cards_away = st.sidebar.number_input(f"Tarjetas Rojas {away_team}", min_value=0, value=0)
 else:
@@ -110,11 +132,12 @@ else:
     live_score_home, live_score_away = 0, 0
     red_cards_home, red_cards_away = 0, 0
 
-# Ajustar por tarjetas rojas
+# Asegurar existencia de equipos en la tabla
 for t in [home_team, away_team]:
     if t not in model.teams_df.index:
         model.teams_df.loc[t] = [model.avg_home_goals, model.avg_away_goals, model.avg_away_goals, model.avg_home_goals, 1.0, 1.0, 1.0, 1.0]
 
+# Ajustes de fuerza por expulsiones
 if red_cards_home > 0:
     model.teams_df.loc[home_team, 'attack_home'] *= (0.75 ** red_cards_home)
     model.teams_df.loc[home_team, 'defense_home'] *= (1.25 ** red_cards_home)
@@ -122,15 +145,14 @@ if red_cards_away > 0:
     model.teams_df.loc[away_team, 'attack_away'] *= (0.75 ** red_cards_away)
     model.teams_df.loc[away_team, 'defense_away'] *= (1.25 ** red_cards_away)
 
-# Cuotas
-st.sidebar.subheader("💰 Cuotas 1X2")
+# Cuotas Mercado
+st.sidebar.subheader("💰 Cuotas 1X2 Mercado")
 odds_home = st.sidebar.number_input(f"Cuota Local ({home_team})", min_value=1.01, value=float(default_home_odd), step=0.05)
 odds_draw = st.sidebar.number_input("Cuota Empate (X)", min_value=1.01, value=float(default_draw_odd), step=0.05)
 odds_away = st.sidebar.number_input(f"Cuota Visitante ({away_team})", min_value=1.01, value=float(default_away_odd), step=0.05)
 
 prediction = model.predict_match(home_team, away_team)
 
-# Reajuste de tiempo restante si está en vivo
 if is_live:
     time_factor = (90 - live_minute) / 90.0
     prediction['expected_goals_home'] = round(prediction['expected_goals_home'] * time_factor, 2)
@@ -201,7 +223,6 @@ with tab2:
         cards_odds_over = st.number_input("Cuota Over Tarjetas", min_value=1.01, value=1.85, step=0.05)
     
     with col_fouls_2:
-        # Probabilidad acumulada de Poisson para Tarjetas Over
         prob_under_cards = sum([poisson.pmf(i, avg_referee_cards) for i in range(int(np.floor(line_cards)) + 1)])
         prob_over_cards = 1.0 - prob_under_cards
         ev_cards = (prob_over_cards * cards_odds_over) - 1
@@ -252,7 +273,7 @@ with tab4:
     fig.update_layout(height=480, width=580)
     st.plotly_chart(fig, use_container_width=True)
 
-# --- PESTAÑA 5: MÉTRICAS DE EQUIPOS (RESTAURADAS) ---
+# --- PESTAÑA 5: MÉTRICAS DE EQUIPOS ---
 with tab5:
     st.subheader("📈 Métricas Históricas de Fuerza Ofensiva y Defensiva")
     st.markdown("Valores calculados respecto al promedio general de la competición (1.0 = Promedio Liga):")
